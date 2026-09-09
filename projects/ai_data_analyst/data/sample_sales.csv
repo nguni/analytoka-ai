@@ -1,0 +1,13 @@
+date,product,category,region,quantity,unit_price
+2026-01-05,Laptop,Electronics,Nairobi,2,85000
+2026-01-07,Mouse,Accessories,Nairobi,10,1500
+2026-01-10,Monitor,Electronics,Mombasa,3,25000
+2026-01-15,Keyboard,Accessories,Kisumu,5,3500
+2026-02-02,Laptop,Electronics,Mombasa,1,85000
+2026-02-05,Monitor,Electronics,Nairobi,4,25000
+2026-02-12,Mouse,Accessories,Kisumu,8,1500
+2026-02-18,Keyboard,Accessories,Nairobi,6,3500
+2026-03-03,Laptop,Electronics,Kisumu,3,85000
+2026-03-09,Monitor,Electronics,Mombasa,2,25000
+2026-03-14,Mouse,Accessories,Nairobi,15,1500
+2026-03-21,Keyboard,Accessories,Mombasa,4,3500
