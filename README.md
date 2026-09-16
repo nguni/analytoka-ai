@@ -729,6 +729,15 @@ Set `GROQ_API_KEY` or `GEMINI_API_KEY` in `.env` or Streamlit secrets for AI
 features. Exploration, cleaning, joins, charts, calculations and exports work
 without an API key. Select a provider and an available model in the sidebar.
 
+### Accounts and guest mode
+
+The app supports guest sessions and authenticated accounts. Guests can upload
+data and ask questions, but their conversations are not saved. Signed-in users
+can save and reload their conversations. Authentication uses Streamlit OIDC;
+configure a provider in `.streamlit/secrets.toml` using the `auth` settings from
+the Streamlit authentication documentation. The sign-in provider also handles
+account creation.
+
 ### Storage and deployment
 
 This release is a **single-user local workspace**. Chats, uploaded tables and
