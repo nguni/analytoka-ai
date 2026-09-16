@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 .DS_Store
 outputs/*.png
+.workspace/
+.pytest_cache/
+.streamlit/secrets.toml

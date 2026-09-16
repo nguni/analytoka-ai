@@ -53,11 +53,14 @@ def load_dataset(
             file_path
         )
 
+    elif file_path_lower.endswith(".parquet"):
+        df = pd.read_parquet(file_path)
+
     elif file_path_lower.endswith((".xlsx", ".xls")):
 
         df = pd.read_excel(
             file_path,
-            sheet_name=sheet_name
+            sheet_name=sheet_name if sheet_name is not None else 0
         )
 
     else:
@@ -74,6 +77,8 @@ def load_dataset(
         for column in df.columns
     ]
 
+    if df.columns.duplicated().any():
+        raise ValueError("Column names collide after normalization; rename ambiguous columns.")
     return df
 
 

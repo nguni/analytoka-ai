@@ -471,20 +471,24 @@ pandas
 openpyxl
 matplotlib
 groq
+google-genai
 python-dotenv
 ```
 
 ---
 
-### 4. Configure the Groq API Key
+### 4. Configure an AI provider
 
 Create a `.env` file in the project root:
 
 ```text
 GROQ_API_KEY=your_groq_api_key
+GEMINI_API_KEY=your_gemini_api_key
 ```
 
-The `.env` file should remain private and must not be committed to GitHub.
+Choose Groq or Gemini in the **AI settings** section of the sidebar. Only the
+key for the selected provider is required. The `.env` file should remain
+private and must not be committed to GitHub.
 
 Your `.gitignore` should include:
 
@@ -698,84 +702,68 @@ should be configured securely on the deployment platform rather than committed t
 
 ---
 
-## ⚠️ Current Limitations
+## Roadmap implementation
 
-Analytoka AI is actively under development.
+The Streamlit workspace now includes:
 
-Current limitations include:
+| Area | Available functionality |
+| --- | --- |
+| Conversations | SQLite persistence, saved datasets, last 20 messages provided to the agent, dataset labels in follow-up context |
+| Analytics | Group comparisons and shares, calendar-aligned MoM/YoY growth, linear trend slope, pivots, target variance/attainment, ratio KPIs |
+| Cleaning | AI recommendations, per-column transformations, strict number/date conversion, category normalization and mappings, IQR capping/removal, before/after previews, undo/reset |
+| Visualization | Interactive bar, line, area, scatter, histogram and box plots; automatic chart selection; dashboard metrics; existing AI chart tools |
+| Data | Multiple CSV/Excel files, all Excel worksheets, append, validated joins, cached Parquet snapshots preserving types |
+| Metadata | Editable data dictionary; question-based lexical retrieval of relevant definitions into model context |
+| Reporting | AI executive summaries, Markdown/PDF reports, CSV/Excel data downloads, conversation and analytical JSON exports |
+| Agent | Groq and Gemini providers, configurable model, lazy credentials, SDK retries/timeouts, bounded tool loop and recoverable tool errors |
 
-- Chat history is currently session-based
-- Conversation context across complex follow-up questions is still being improved
-- Cross-sheet analysis is limited
-- Multi-dataset relationships are not yet supported
-- Cleaning recommendations are currently primarily user-controlled
-- Generated chart files use temporary/local storage
-- Advanced BI calculations are still being expanded
-- Persistent authentication and user accounts are not yet implemented
+### Run locally
 
----
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python -m streamlit run projects/ai_data_analyst/app.py
+```
 
-## 🗺️ Roadmap
+Set `GROQ_API_KEY` or `GEMINI_API_KEY` in `.env` or Streamlit secrets for AI
+features. Exploration, cleaning, joins, charts, calculations and exports work
+without an API key. Select a provider and an available model in the sidebar.
 
-Future development is planned across several areas.
+### Storage and deployment
 
-### 💬 Conversational Intelligence
+This release is a **single-user local workspace**. Chats, uploaded tables and
+charts persist under `projects/ai_data_analyst/.workspace/`, excluded from Git.
+Set `ANALYTOKA_DATA_DIR` to use another persistent directory. All visitors to the
+same server would share this workspace; user accounts and per-user isolation
+must be added before a public multi-user deployment. Ephemeral hosting disks do
+not provide durable storage across redeploys. Deleting a conversation's messages
+does not delete its uploaded datasets or old snapshots.
 
-- Conversational memory
-- Better follow-up question understanding
-- Context-aware analysis
-- Persistent chat history
+### Practical bounds
 
-### 📊 Advanced Analytics
+- Files are limited to 200 MB each. Data remains in memory during operations;
+  this is not an out-of-core analytics engine. Excel worksheets are imported together.
+- Table previews show 1,000 rows and interactive charts show the first 5,000,
+  explicitly labeled. Analytical tool responses show at most 500 result rows.
+- Growth calculations preserve missing months and leave undefined ratios blank.
+  A trend slope describes observed data and is not a forecast or significance test.
+- Joins require nonmissing keys and validate the chosen relationship; unrestricted
+  many-to-many joins are intentionally unavailable.
+- Metadata retrieval uses lexical overlap, not embeddings or a vector database.
+- Conversation context is bounded to 20 messages; full history remains saved.
+- PDF reports include text and calculated results; chart image embedding and
+  full Unicode font coverage remain future enhancements.
+- Live provider responses depend on configured credentials and model availability.
 
-- Group comparisons
-- Percentage-change calculations
-- Month-over-month analysis
-- Year-over-year analysis
-- Pivot analysis
-- Target vs actual analysis
-- Advanced KPI calculations
-- Trend detection
+### Tests
 
-### 🧹 Intelligent Data Cleaning
+```powershell
+.\.venv\Scripts\python -m pip install pytest
+.\.venv\Scripts\python -m pytest tests -q
+```
 
-- AI-generated cleaning recommendations
-- Column-specific cleaning strategies
-- Data-type correction
-- Category standardization
-- Outlier treatment
-- Before/after comparison
-- Cleaning undo functionality
-
-### 📈 Visualization
-
-- Improved automatic chart selection
-- Additional chart types
-- Interactive charts
-- Dashboard-style summaries
-
-### 📁 Data Support
-
-- Cross-sheet Excel analysis
-- Multi-file analysis
-- Larger dataset support
-- Data dictionary support
-- RAG-assisted metadata understanding
-
-### 📄 Reporting
-
-- Automated executive summaries
-- Downloadable analytical reports
-- PDF reports
-- Analysis export
-
-### 🤖 AI Architecture
-
-- Additional LLM providers
-- Improved tool routing
-- More specialized analytical tools
-- Improved agent orchestration
-- More robust error recovery
+Tests cover analytics edge cases, persistence, type preservation, workbook imports,
+join validation, agent memory and dataset routing, and Streamlit interaction flows.
 
 ---
 

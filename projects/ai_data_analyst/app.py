@@ -1,1778 +1,337 @@
-import os
-import tempfile
-import uuid
-
+"""Analytoka AI: persistent local data analysis workspace."""
+import json
+from pathlib import Path
 import pandas as pd
 import streamlit as st
-
+import altair as alt
 from agent_groq import run_agent
+from workspace import (new_chat, list_chats, save_chat, import_upload, save_frame,
+                       transform, apply_change, join_frames)
+from tools.cleaning_tools import (profile_data_quality, dataframe_to_excel, trim_text_values,
+    remove_duplicates, drop_missing_rows, fill_missing_text, fill_numeric_with_median, remove_empty_columns)
+from tools.advanced_tools import advanced_analysis
+from reports import markdown_report, pdf_report
+from ui import inject_styles, brand, topline, welcome, workflow, dataset_heading, overview_banner, footer
 
-from tools.cleaning_tools import (
-    profile_data_quality,
-    remove_duplicates,
-    drop_missing_rows,
-    fill_missing_text,
-    fill_numeric_with_median,
-    trim_text_values,
-    remove_empty_columns,
-    save_working_dataset,
-    dataframe_to_csv,
-    dataframe_to_excel,
-)
-
-
-# ============================================================
-# 1. PAGE CONFIG
-# ============================================================
-
-st.set_page_config(
-    page_title="Analytoka AI",
-    page_icon="📊",
-    layout="wide"
-)
-
-
-# ============================================================
-# 2. CUSTOM STYLING
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-
-    .main-title {
-        font-size: 42px;
-        font-weight: 700;
-        margin-bottom: 0px;
-    }
-
-    .subtitle {
-        font-size: 18px;
-        opacity: 0.75;
-        margin-top: 0px;
-        margin-bottom: 25px;
-    }
-
-    .welcome-box {
-        padding: 24px;
-        border-radius: 12px;
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        margin-top: 10px;
-        margin-bottom: 25px;
-    }
-
-    .welcome-title {
-        font-size: 25px;
-        font-weight: 600;
-        margin-bottom: 10px;
-    }
-
-    .footer {
-        text-align: center;
-        padding: 30px 10px 15px 10px;
-        margin-top: 45px;
-        border-top: 1px solid rgba(128, 128, 128, 0.2);
-        font-size: 13px;
-        opacity: 0.7;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# 3. HELPER FUNCTIONS
-# ============================================================
-
-def show_footer():
-
-    st.markdown(
-        """
-        <div class="footer">
-            © 2026 John Muthoka. All rights reserved.<br>
-            <strong>Analytoka AI</strong> — AI Data Analyst Agent<br>
-            Designed & Developed by John Muthoka
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-def create_new_chat():
-
-    chat_id = str(
-        uuid.uuid4()
-    )
-
-    st.session_state.chats[
-        chat_id
-    ] = {
-        "title": "New Chat",
-        "messages": [],
-        "original_file_path": None,
-        "working_file_path": None,
-        "file_name": None,
-        "sheet_name": None,
-        "previous_file": None,
-        "cleaned_df": None,
-        "cleaning_history": []
-    }
-
-    st.session_state.active_chat = (
-        chat_id
-    )
-
-    return chat_id
-
-
-def get_active_chat():
-
-    return st.session_state.chats[
-        st.session_state.active_chat
-    ]
-
-
-def generate_chat_title(
-    question: str
-):
-
-    words = (
-        question
-        .strip()
-        .split()
-    )
-
-    title = " ".join(
-        words[:6]
-    )
-
-    if len(words) > 6:
-        title += "..."
-
-    return title
-
-
-# ============================================================
-# 4. SESSION STATE
-# ============================================================
-
+st.set_page_config(page_title="Analytoka AI · Data studio", page_icon="◧", layout="wide")
+inject_styles()
 if "chats" not in st.session_state:
-
-    st.session_state.chats = {}
-
-
-if "active_chat" not in st.session_state:
-
-    st.session_state.active_chat = None
-
-
+    st.session_state.chats = {c["id"]: c for c in list_chats()}
 if not st.session_state.chats:
-
-    create_new_chat()
-
-
-active_chat = (
-    get_active_chat()
-)
-
-
-# ============================================================
-# 5. APPLICATION HEADER
-# ============================================================
-
-st.markdown(
-    '<p class="main-title">📊 Analytoka AI</p>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    """
-    <p class="subtitle">
-        AI-Powered Data Analyst Agent
-    </p>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# 6. SIDEBAR
-# ============================================================
+    chat = new_chat()
+    st.session_state.chats[chat["id"]] = chat
+if st.session_state.get("active_chat") not in st.session_state.chats:
+    st.session_state.active_chat = next(iter(st.session_state.chats))
 
 with st.sidebar:
-
-    st.title(
-        "📊 Analytoka AI"
-    )
-
-    st.caption(
-        "Your AI Data Analyst"
-    )
-
-    st.divider()
-
-    st.header(
-        "💬 Chats"
-    )
-
-
-    # --------------------------------------------------------
-    # NEW CHAT
-    # --------------------------------------------------------
-
-    if st.button(
-        "➕ New Chat",
-        width="stretch"
-    ):
-
-        create_new_chat()
-
+    brand()
+    if st.button("New chat", type="primary", width="stretch"):
+        chat = new_chat()
+        st.session_state.chats[chat["id"]] = chat
+        st.session_state.active_chat = chat["id"]
+        save_chat(chat)
         st.rerun()
+    st.markdown('<div class="side-label">YOUR WORKSPACE</div>', unsafe_allow_html=True)
+    ids = list(st.session_state.chats)
+    chat_titles = {k: st.session_state.chats[k]["title"] for k in ids}
+    selected = st.selectbox("Chats", ids, index=ids.index(st.session_state.active_chat),
+                            format_func=lambda k, labels=chat_titles: labels[k])
+    st.session_state.active_chat = selected
+    chat = st.session_state.chats[selected]
+    with st.expander("AI settings", expanded=False):
+        provider = st.selectbox("AI provider", ["Groq", "Gemini"])
+        model = st.text_input("Model", value="openai/gpt-oss-120b" if provider == "Groq" else "gemini-3.6-flash", key=f"model_{provider}")
+    with st.expander("Add data", expanded=False):
+        files = st.file_uploader("Add CSV or Excel files", type=["csv", "xlsx", "xls"],
+                                 accept_multiple_files=True, key=f"uploads_{selected}")
+    for uploaded in files:
+        try:
+            import_upload(chat, uploaded.name, uploaded.getvalue())
+        except Exception as error:
+            st.error(f"{uploaded.name}: {error}")
+    if chat["datasets"]:
+        names = list(chat["datasets"])
+        active = st.selectbox("Active dataset / worksheet", names,
+                             index=names.index(chat["active"]), key=f"dataset_{selected}_{len(names)}")
+        if active != chat["active"]:
+            for key in ("analysis", "summary", "recommendations"):
+                chat.pop(key, None)
+        chat["active"] = active
+    if st.button("Clear conversation"):
+        chat["messages"] = []
+        save_chat(chat)
+        st.rerun()
+    save_chat(chat)
+    st.markdown('<div class="side-note"><strong>A space for better questions.</strong><br>Your datasets, conversations, and discoveries. All in one place.</div>', unsafe_allow_html=True)
 
-
-    # --------------------------------------------------------
-    # CHAT LIST
-    # --------------------------------------------------------
-
-    for chat_id, chat in (
-        st.session_state
-        .chats
-        .items()
-    ):
-
-        button_type = (
-            "primary"
-            if chat_id
-            ==
-            st.session_state.active_chat
-            else "secondary"
-        )
-
-        if st.button(
-            chat["title"],
-            key=f"chat_{chat_id}",
-            width="stretch",
-            type=button_type
-        ):
-
-            st.session_state.active_chat = (
-                chat_id
-            )
-
+topline(bool(chat["datasets"]))
+if not chat["datasets"]:
+    welcome()
+    st.markdown('<div class="section-title">Start with a dataset</div><div class="section-note">Your next insight is already in there.</div>', unsafe_allow_html=True)
+    incoming = st.file_uploader("Upload a CSV or Excel workbook", type=["csv", "xlsx", "xls"], accept_multiple_files=True, key=f"welcome_upload_{selected}")
+    for uploaded in incoming:
+        try:
+            import_upload(chat, uploaded.name, uploaded.getvalue())
+            save_chat(chat)
+        except Exception as error:
+            st.error(f"{uploaded.name}: {error}")
+    if chat["datasets"]:
+        st.rerun()
+    demo, note = st.columns([1, 2.4])
+    with demo:
+        if st.button("Try sample data", width="stretch"):
+            sample = Path(__file__).parent / "data" / "sample_sales.csv"
+            import_upload(chat, sample.name, sample.read_bytes())
+            save_chat(chat)
             st.rerun()
+    with note:
+        st.caption("Just looking around? Take the studio for a spin with a sample dataset.")
+    workflow()
+    footer()
+    st.stop()
 
+@st.cache_data(max_entries=8, show_spinner=False)
+def read_frame(path):
+    return pd.read_parquet(path)
 
-    st.divider()
+@st.cache_data(max_entries=2, show_spinner=False)
+def excel_export(path):
+    return dataframe_to_excel(read_frame(path))
 
-    st.header(
-        "📁 Data Workspace"
-    )
+@st.cache_data(max_entries=4, show_spinner=False)
+def pdf_export(text):
+    return pdf_report(text)
 
+dataset = chat["datasets"][chat["active"]]
+df = read_frame(dataset["path"])
+dataset_heading(chat["active"], len(chat["datasets"]))
+a, b, c, d = st.columns(4)
+a.metric("Rows", f"{len(df):,}")
+b.metric("Columns", len(df.columns))
+c.metric("Missing cells", int(df.isna().sum().sum()))
+d.metric("Duplicate rows", int(df.duplicated().sum()))
+preview, clean, combine, analytics, visuals, dictionary, reports, conversation = st.tabs(
+    ["Explore", "Clean", "Combine", "Analytics", "Charts", "Data dictionary", "Reports", "Chat"])
 
-    # ========================================================
-    # FILE UPLOADER
-    # ========================================================
+with preview:
+    overview_banner(df)
+    st.markdown('<div class="section-title">Inside your dataset</div><div class="section-note">The details behind the bigger picture.</div>', unsafe_allow_html=True)
+    st.dataframe(df.head(1000), hide_index=True, width="stretch")
+    st.caption("Preview limited to 1,000 rows; calculations use the full dataset.")
+    with st.expander("Field guide · column types and completeness"):
+        st.dataframe(pd.DataFrame({"type": df.dtypes.astype(str), "missing": df.isna().sum(), "unique": df.nunique()}), width="stretch")
+    if len(df.columns):
+        with st.expander("Descriptive statistics · distributions at a glance"):
+            st.dataframe(df.describe(include="all").astype(str), width="stretch")
 
-    uploaded_file = st.file_uploader(
-        "Upload your dataset",
-        type=[
-            "xlsx",
-            "xls",
-            "csv"
-        ],
-        key=(
-            f"upload_"
-            f"{st.session_state.active_chat}"
-        )
-    )
-
-
-    if uploaded_file is not None:
-
-        extension = (
-            os.path.splitext(
-                uploaded_file.name
-            )[1]
-            .lower()
-        )
-
-        new_file = (
-            active_chat[
-                "previous_file"
-            ]
-            !=
-            uploaded_file.name
-        )
-
-
-        # ----------------------------------------------------
-        # NEW FILE
-        # ----------------------------------------------------
-
-        if new_file:
-
-            active_chat[
-                "messages"
-            ] = []
-
-            active_chat[
-                "sheet_name"
-            ] = None
-
-            active_chat[
-                "cleaned_df"
-            ] = None
-
-            active_chat[
-                "cleaning_history"
-            ] = []
-
-            active_chat[
-                "previous_file"
-            ] = uploaded_file.name
-
-
-        # ----------------------------------------------------
-        # SAVE UPLOAD
-        # ----------------------------------------------------
-
-        if (
-            new_file
-            or
-            active_chat[
-                "original_file_path"
-            ]
-            is None
-        ):
-
-            with tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=extension
-            ) as temp_file:
-
-                temp_file.write(
-                    uploaded_file.getvalue()
-                )
-
-                temp_path = (
-                    temp_file.name
-                )
-
-
-            active_chat[
-                "original_file_path"
-            ] = temp_path
-
-            active_chat[
-                "working_file_path"
-            ] = temp_path
-
-            active_chat[
-                "file_name"
-            ] = uploaded_file.name
-
-
-        st.success(
-            f"✓ {uploaded_file.name}"
-        )
-
-
-        # ----------------------------------------------------
-        # EXCEL WORKSHEET
-        # ----------------------------------------------------
-
-        if extension in [
-            ".xlsx",
-            ".xls"
-        ]:
-
+with clean:
+    st.subheader("A little cleanup. A lot more confidence.")
+    st.caption("Preview every change. Your original dataset stays intact.")
+    quality = profile_data_quality(df)
+    st.write(f"{quality['missing_values']} missing cells; {quality['duplicate_rows']} duplicate rows.")
+    if st.button("Get AI cleaning recommendations"):
+        with st.spinner("Reviewing data quality…"):
+            advice = run_agent("Inspect data quality and recommend specific cleaning actions by column, explaining tradeoffs. Do not change the data.", dataset["path"], metadata=chat["metadata"], provider=provider, model=model)
+            chat["recommendations"] = advice["answer"]
+            save_chat(chat)
+    if chat.get("recommendations"):
+        st.markdown(chat["recommendations"])
+    if len(df.columns):
+        column = st.selectbox("Column", list(df.columns), key=f"clean_col_{selected}")
+        action = st.selectbox("Action", ["Trim text", "Standardize categories", "Category mapping", "Convert to number", "Convert to date", "Fill missing", "Fill median", "Drop missing rows", "Remove empty column", "Remove duplicates", "Cap outliers", "Remove outliers"])
+        value = st.text_input("Replacement value / category mapping JSON")
+        bulk_action = st.selectbox("Optional whole-table action", ["None", "Trim all text", "Fill missing text", "Fill numeric medians", "Drop rows with any missing value", "Remove empty columns"])
+        bulk_functions = {"Trim all text": trim_text_values, "Fill missing text": lambda frame: fill_missing_text(frame, value or "Unknown"), "Fill numeric medians": fill_numeric_with_median, "Drop rows with any missing value": drop_missing_rows, "Remove empty columns": remove_empty_columns}
+        st.caption("Category standardization trims spaces and lowercases text. Outlier treatment uses 1.5 × IQR. Type conversion rejects invalid values.")
+        if st.button("Preview cleaning"):
             try:
-
-                excel_file = (
-                    pd.ExcelFile(
-                        active_chat[
-                            "original_file_path"
-                        ]
-                    )
-                )
-
-                sheet_names = (
-                    excel_file
-                    .sheet_names
-                )
-
-                default_index = 0
-
-
-                if (
-                    active_chat[
-                        "sheet_name"
-                    ]
-                    in sheet_names
-                ):
-
-                    default_index = (
-                        sheet_names.index(
-                            active_chat[
-                                "sheet_name"
-                            ]
-                        )
-                    )
-
-
-                selected_sheet = (
-                    st.selectbox(
-                        "Select worksheet",
-                        options=sheet_names,
-                        index=default_index,
-                        key=(
-                            f"sheet_"
-                            f"{st.session_state.active_chat}"
-                        )
-                    )
-                )
-
-
-                # --------------------------------------------
-                # SHEET CHANGED
-                # --------------------------------------------
-
-                if (
-                    active_chat[
-                        "sheet_name"
-                    ]
-                    is not None
-                    and
-                    active_chat[
-                        "sheet_name"
-                    ]
-                    !=
-                    selected_sheet
-                ):
-
-                    active_chat[
-                        "messages"
-                    ] = []
-
-                    active_chat[
-                        "cleaned_df"
-                    ] = None
-
-                    active_chat[
-                        "cleaning_history"
-                    ] = []
-
-                    active_chat[
-                        "working_file_path"
-                    ] = active_chat[
-                        "original_file_path"
-                    ]
-
-
-                active_chat[
-                    "sheet_name"
-                ] = selected_sheet
-
-
-                st.caption(
-                    f"{len(sheet_names)} worksheet(s)"
-                )
-
-
+                if bulk_action != "None":
+                    candidate, description = bulk_functions[bulk_action](df)
+                else:
+                    candidate = transform(df, column, action, value)
+                    description = f"{action}: {column}"
+                st.session_state.clean_preview = (selected, chat["active"], dataset["path"], description, candidate)
             except Exception as error:
+                st.error(str(error))
+        candidate = st.session_state.get("clean_preview")
+        if candidate and candidate[:3] == (selected, chat["active"], dataset["path"]):
+            after = candidate[4]
+            st.write({"rows_before": len(df), "rows_after": len(after), "missing_before": int(df.isna().sum().sum()), "missing_after": int(after.isna().sum().sum())})
+            left, right = st.columns(2)
+            left.dataframe(df.head(30))
+            right.dataframe(after.head(30))
+            if st.button("Apply previewed change"):
+                apply_change(chat, after, candidate[3])
+                save_chat(chat)
+                st.rerun()
+    if st.button("Undo last change", disabled=not dataset["undo"]):
+        dataset["path"] = dataset["undo"].pop()
+        for key in ("analysis", "summary", "recommendations"):
+            chat.pop(key, None)
+        chat["history"].append({"dataset": chat["active"], "action": "Undo"})
+        save_chat(chat)
+        st.rerun()
+    if st.button("Reset to original", disabled=dataset["path"] == dataset["original"]):
+        dataset["undo"].append(dataset["path"])
+        dataset["path"] = dataset["original"]
+        for key in ("analysis", "summary", "recommendations"):
+            chat.pop(key, None)
+        chat["history"].append({"dataset": chat["active"], "action": "Reset"})
+        save_chat(chat)
+        st.rerun()
+    st.dataframe(chat["history"])
+    st.download_button("Download CSV", df.to_csv(index=False).encode(), "cleaned.csv", "text/csv")
+    st.download_button("Download Excel", excel_export(dataset["path"]), "cleaned.xlsx")
 
-                st.error(
-                    f"Unable to read workbook: {error}"
-                )
+with combine:
+    st.subheader("See how it all connects.")
+    st.caption("Bring related tables together to reveal the complete picture.")
+    others = [name for name in chat["datasets"] if name != chat["active"]]
+    if not others:
+        st.info("Add another file or a workbook with multiple worksheets to combine data.")
+    else:
+        other = st.selectbox("Other dataset", others)
+        right_df = read_frame(chat["datasets"][other]["path"])
+        mode = st.radio("Combine method", ["Join by key", "Append rows"], horizontal=True)
+        if mode == "Join by key" and len(df.columns) and len(right_df.columns):
+            left_key = st.selectbox("Left key", list(df.columns))
+            right_key = st.selectbox("Right key", list(right_df.columns))
+            how = st.selectbox("Join type", ["left", "inner", "outer", "right"])
+            validation = st.selectbox("Relationship", ["many_to_one", "one_to_one", "one_to_many"])
+        if st.button("Create combined dataset"):
+            try:
+                if mode == "Append rows":
+                    if set(df.columns) != set(right_df.columns):
+                        raise ValueError("Append requires matching column names")
+                    combined = pd.concat([df, right_df], ignore_index=True)
+                else:
+                    combined = join_frames(df, right_df, left_key, right_key, how, validation)
+                path = save_frame(combined)
+                label = f"Combined {len(chat['datasets']) + 1}"
+                chat["datasets"][label] = {"original": path, "path": path, "undo": []}
+                for key in ("analysis", "summary", "recommendations"):
+                    chat.pop(key, None)
+                chat["active"] = label
+                save_chat(chat)
+                st.success(f"Created {label}: {len(combined):,} rows. Select it in the sidebar.")
+            except Exception as error:
+                st.error(str(error))
 
+with analytics:
+    st.subheader("Go beyond the headline number.")
+    st.caption("Compare performance, follow growth, and measure what matters.")
+    numeric = list(df.select_dtypes(include="number").columns)
+    if not numeric:
+        st.info("A numeric column is required for business analytics.")
+    else:
+        operation = st.selectbox("Analysis", ["compare", "growth", "pivot", "target", "ratio"])
+        metric = st.selectbox("Metric", numeric)
+        group = st.selectbox("Group / pivot rows", [None] + list(df.columns))
+        date = st.selectbox("Date column", list(df.columns)) if operation == "growth" else None
+        target = st.selectbox("Pivot columns" if operation == "pivot" else "Target column", list(df.columns) if operation == "pivot" else numeric) if operation in {"target", "pivot"} else None
+        denominator = st.selectbox("Denominator", numeric) if operation == "ratio" else None
+        aggregation = st.selectbox("Aggregation", ["sum", "mean", "median", "count", "min", "max"])
+        if st.button("Calculate"):
+            try:
+                result = advanced_analysis(dataset["path"], operation, metric, group, date, target, denominator, aggregation)
+                chat["analysis"] = result
+                save_chat(chat)
+            except Exception as error:
+                st.error(str(error))
+        if chat.get("analysis"):
+            result = chat["analysis"]
+            st.dataframe(result["rows"])
+            st.caption(f"Showing up to 500 of {result['total_result_rows']} result rows. Undefined ratios are blank.")
+            if "linear_trend_per_month" in result:
+                st.write({k: result[k] for k in ["linear_trend_per_month", "invalid_dates_excluded"]})
+            st.download_button("Export analysis JSON", json.dumps(result, indent=2), "analysis.json")
 
-        else:
+with visuals:
+    st.subheader("Give your numbers a point of view.")
+    st.caption("Choose a perspective. Explore the story in your data.")
+    if len(df.columns):
+        x = st.selectbox("X axis", list(df.columns))
+        y = st.selectbox("Y axis", [None] + numeric)
+        kind = st.selectbox("Chart", ["Auto", "Bar", "Line", "Area", "Scatter", "Histogram", "Box plot"])
+        chosen = kind
+        if chosen == "Auto":
+            if y is None:
+                chosen = "Histogram" if x in numeric else "Bar"
+            elif x in numeric:
+                chosen = "Scatter"
+            else:
+                dates = pd.to_datetime(df[x].head(100).astype(str), errors="coerce")
+                chosen = "Line" if len(dates) and dates.notna().mean() > .9 else "Bar"
+        try:
+            chart_df = df.head(5000).copy()
+            chart_df.columns = [f"c{i}" for i in range(len(df.columns))]
+            xc = f"c{list(df.columns).index(x)}"
+            yc = f"c{list(df.columns).index(y)}" if y else None
+            base = alt.Chart(chart_df)
+            if chosen == "Histogram":
+                chart = base.mark_bar().encode(x=alt.X(xc, type="quantitative", bin=True, title=x), y="count()")
+            elif chosen in {"Line", "Area"}:
+                chart_df[xc] = pd.to_datetime(chart_df[xc], errors="raise")
+                base = alt.Chart(chart_df)
+                chart = (base.mark_line() if chosen == "Line" else base.mark_area()).encode(x=alt.X(xc, type="temporal", title=x), y=alt.Y(yc, type="quantitative", aggregate="sum", title=y) if yc else alt.Y("count()"))
+            elif chosen == "Scatter":
+                if not yc:
+                    raise ValueError("Choose a Y axis for a scatter plot")
+                chart = base.mark_circle().encode(x=alt.X(xc, type="quantitative", title=x), y=alt.Y(yc, type="quantitative", title=y))
+            elif chosen == "Box plot":
+                if not yc:
+                    raise ValueError("Choose a numeric Y axis")
+                chart = base.mark_boxplot().encode(x=alt.X(xc, type="nominal", title=x), y=alt.Y(yc, type="quantitative", title=y))
+            else:
+                chart = base.mark_bar().encode(x=alt.X(xc, type="nominal", title=x), y=alt.Y(yc, type="quantitative", aggregate="sum", title=y) if yc else alt.Y("count()"))
+            st.altair_chart(chart.properties(height=340).configure(background="#f7f7f2").configure_range(category=["#294b53", "#dc784c", "#a7bfae", "#caa46d", "#71899a"]).configure_axis(gridColor="#e2e5dd", domainColor="#d5dcd2", labelColor="#697681", titleColor="#294b53").configure_view(strokeWidth=0).interactive(), width="stretch")
+            st.caption(f"{chosen} chart · first {min(len(df), 5000):,} rows. Chat-generated charts use the full dataset.")
+        except Exception as error:
+            st.info(str(error))
 
-            active_chat[
-                "sheet_name"
-            ] = None
+with dictionary:
+    st.subheader("Every field has a meaning.")
+    st.caption("Describe columns, units, business definitions and KPI rules. Relevant lines are retrieved for each AI question.")
+    metadata = st.text_area("Data dictionary", chat["metadata"], height=220, key=f"metadata_{selected}")
+    if st.button("Save dictionary"):
+        chat["metadata"] = metadata
+        save_chat(chat)
+        st.success("Saved")
 
+with reports:
+    st.subheader("Make your findings travel.")
+    st.caption("A clear summary, ready to share with the people who need it.")
+    if st.button("Generate executive summary"):
+        with st.spinner("Analyzing…"):
+            response = run_agent("Produce an executive summary with verified key metrics, trends, data quality limitations and practical next steps.", dataset["path"], metadata=chat["metadata"], provider=provider, model=model)
+            chat["summary"] = response["answer"]
+            save_chat(chat)
+    if chat.get("summary"):
+        st.markdown(chat["summary"])
+    report = markdown_report(chat, df)
+    st.download_button("Download report (Markdown)", report, "analytoka-report.md")
+    st.download_button("Download report (PDF)", pdf_export(report), "analytoka-report.pdf", "application/pdf")
+    st.download_button("Export conversation", json.dumps(chat["messages"], indent=2), "conversation.json")
 
-    st.divider()
-
-
-    # --------------------------------------------------------
-    # CLEAR CHAT
-    # --------------------------------------------------------
-
-    if st.button(
-        "🗑️ Clear Chat",
-        width="stretch"
-    ):
-
-        active_chat[
-            "messages"
-        ] = []
-
+with conversation:
+    st.subheader("What are you curious about?")
+    st.caption("Ask a question, follow a thought, or dig a little deeper.")
+    for message in chat["messages"]:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            for chart in message.get("charts", []):
+                if Path(chart["path"]).is_file():
+                    st.image(chart["path"], caption=chart.get("title"))
+    if question := st.chat_input("Ask about your data"):
+        history = [{"role": m["role"], "content": f"[Dataset: {m.get('dataset', 'previous')}] {m['content']}"} for m in chat["messages"]]
+        with st.spinner("Analyzing…"):
+            response = run_agent(question, dataset["path"], history=history, metadata=chat["metadata"], provider=provider, model=model)
+        chat["messages"].extend([
+            {"role": "user", "content": question, "dataset": chat["active"]},
+            {"role": "assistant", "content": response["answer"], "charts": response.get("charts", []), "dataset": chat["active"]}])
+        if chat["title"] == "New Chat":
+            chat["title"] = " ".join(question.split()[:7])
+        save_chat(chat)
         st.rerun()
 
-
-    st.divider()
-
-    st.caption(
-        "© 2026 John Muthoka"
-    )
-
-    st.caption(
-        "Designed & Developed by John Muthoka"
-    )
-
-
-# ============================================================
-# 7. REFRESH ACTIVE CHAT
-# ============================================================
-
-active_chat = (
-    get_active_chat()
-)
-
-
-# ============================================================
-# 8. WELCOME SCREEN
-# ============================================================
-
-if active_chat["original_file_path"] is None:
-
-    st.markdown(
-        """
-<div class="welcome-box">
-<div class="welcome-title">👋 Hey there, I'm Analytoka AI</div>
-
-<p>
-I'm your AI-powered <strong>Data Analyst Agent</strong>.
-Upload an Excel or CSV dataset and I'll help you explore,
-clean, analyze, visualize and uncover meaningful insights
-from your data.
-</p>
-
-<p>
-You don't need to write SQL, Python or complex formulas.
-Simply upload your data and ask me questions using
-natural language.
-</p>
-</div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.info(
-        "👈 Upload an Excel or CSV dataset from the sidebar to get started."
-    )
-
-    # ========================================================
-    # CAPABILITIES
-    # ========================================================
-
-    st.markdown("## ✨ What can I do?")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.markdown(
-            """
-### 🔎 Explore
-Understand your dataset structure, columns, data types,
-distributions and descriptive statistics.
-            """
-        )
-
-    with col2:
-        st.markdown(
-            """
-### 🧹 Clean
-Identify and handle missing values, duplicate records,
-blank fields and common data-quality problems.
-            """
-        )
-
-    with col3:
-        st.markdown(
-            """
-### 📊 Analyze
-Ask business questions and let Analytoka AI calculate metrics,
-comparisons and performance indicators.
-            """
-        )
-
-    col4, col5, col6 = st.columns(3)
-
-    with col4:
-        st.markdown(
-            """
-### 📈 Visualize
-Generate bar charts, line charts, scatter plots,
-histograms, box plots and heatmaps.
-            """
-        )
-
-    with col5:
-        st.markdown(
-            """
-### 🧠 Discover
-Identify trends, correlations, outliers, patterns
-and important observations hidden in your data.
-            """
-        )
-
-    with col6:
-        st.markdown(
-            """
-### 💬 Ask Naturally
-Interact with your dataset conversationally
-without writing SQL or Python.
-            """
-        )
-
-    st.divider()
-
-    st.markdown("### 💡 Things you can ask me")
-
-    examples1, examples2 = st.columns(2)
-
-    with examples1:
-        st.markdown(
-            """
-- *Analyze this dataset and give me the key insights.*
-- *Which region generated the highest revenue?*
-- *What are the top-performing products?*
-- *Are there any unusual values or outliers?*
-            """
-        )
-
-    with examples2:
-        st.markdown(
-            """
-- *Plot the monthly revenue trend.*
-- *Show revenue by region as a bar chart.*
-- *Analyze correlations and create a heatmap.*
-- *What data-quality problems should I fix?*
-            """
-        )
-
-    show_footer()
-
-    st.stop()
-
-
-# ============================================================
-# 9. LOAD DATA
-# ============================================================
-
-original_file_path = (
-    active_chat[
-        "original_file_path"
-    ]
-)
-
-working_file_path = (
-    active_chat[
-        "working_file_path"
-    ]
-)
-
-extension = (
-    os.path.splitext(
-        original_file_path
-    )[1]
-    .lower()
-)
-
-
-try:
-
-    if (
-        active_chat[
-            "cleaned_df"
-        ]
-        is not None
-    ):
-
-        df = (
-            active_chat[
-                "cleaned_df"
-            ]
-            .copy()
-        )
-
-
-    elif extension == ".csv":
-
-        df = (
-            pd.read_csv(
-                original_file_path
-            )
-        )
-
-
-    else:
-
-        df = (
-            pd.read_excel(
-                original_file_path,
-                sheet_name=(
-                    active_chat[
-                        "sheet_name"
-                    ]
-                )
-            )
-        )
-
-
-except Exception as error:
-
-    st.error(
-        f"Unable to read dataset: {error}"
-    )
-
-    show_footer()
-
-    st.stop()
-
-
-# ============================================================
-# 10. DATASET HEADER
-# ============================================================
-
-st.markdown(
-    f"## {active_chat['title']}"
-)
-
-st.caption(
-    f"📁 Dataset: {active_chat['file_name']}"
-)
-
-
-if active_chat[
-    "sheet_name"
-]:
-
-    st.caption(
-        f"📄 Worksheet: {active_chat['sheet_name']}"
-    )
-
-
-if (
-    active_chat[
-        "cleaned_df"
-    ]
-    is not None
-):
-
-    st.success(
-        "🧹 Analytoka AI is currently working with your cleaned dataset."
-    )
-
-else:
-
-    st.info(
-        "📊 Analytoka AI is currently working with your original dataset."
-    )
-
-
-# ============================================================
-# 11. DATA QUALITY SUMMARY
-# ============================================================
-
-quality = (
-    profile_data_quality(
-        df
-    )
-)
-
-
-m1, m2, m3, m4 = (
-    st.columns(4)
-)
-
-
-with m1:
-
-    st.metric(
-        "Rows",
-        f"{quality['rows']:,}"
-    )
-
-
-with m2:
-
-    st.metric(
-        "Columns",
-        f"{quality['columns']:,}"
-    )
-
-
-with m3:
-
-    st.metric(
-        "Missing Values",
-        f"{quality['missing_values']:,}"
-    )
-
-
-with m4:
-
-    st.metric(
-        "Duplicates",
-        f"{quality['duplicate_rows']:,}"
-    )
-
-
-# ============================================================
-# 12. DATA TABS
-# ============================================================
-
-(
-    preview_tab,
-    structure_tab,
-    stats_tab,
-    quality_tab,
-    cleaning_tab
-) = st.tabs(
-    [
-        "📋 Preview",
-        "🔎 Structure",
-        "📈 Statistics",
-        "⚠️ Data Quality",
-        "🧹 Data Cleaning"
-    ]
-)
-
-
-# ============================================================
-# 13. PREVIEW
-# ============================================================
-
-with preview_tab:
-
-    st.subheader(
-        "Dataset Preview"
-    )
-
-    st.caption(
-        "Showing the first 100 rows."
-    )
-
-    st.dataframe(
-        df.head(100),
-        width="stretch",
-        hide_index=True
-    )
-
-
-# ============================================================
-# 14. STRUCTURE
-# ============================================================
-
-with structure_tab:
-
-    st.subheader(
-        "Dataset Structure"
-    )
-
-    structure_rows = []
-
-
-    for column in df.columns:
-
-        structure_rows.append(
-            {
-                "Column": column,
-
-                "Data Type": str(
-                    df[column].dtype
-                ),
-
-                "Missing": int(
-                    df[column]
-                    .isnull()
-                    .sum()
-                ),
-
-                "Unique Values": int(
-                    df[column]
-                    .nunique(
-                        dropna=True
-                    )
-                )
-            }
-        )
-
-
-    structure_df = (
-        pd.DataFrame(
-            structure_rows
-        )
-    )
-
-
-    st.dataframe(
-        structure_df,
-        width="stretch",
-        hide_index=True
-    )
-
-
-# ============================================================
-# 15. STATISTICS
-# ============================================================
-
-with stats_tab:
-
-    st.subheader(
-        "Descriptive Statistics"
-    )
-
-
-    numeric_df = (
-        df.select_dtypes(
-            include="number"
-        )
-    )
-
-
-    if numeric_df.empty:
-
-        st.info(
-            "No numeric columns were detected."
-        )
-
-
-    else:
-
-        st.dataframe(
-            numeric_df
-            .describe()
-            .transpose(),
-            width="stretch"
-        )
-
-
-# ============================================================
-# 16. DATA QUALITY
-# ============================================================
-
-with quality_tab:
-
-    st.subheader(
-        "Data Quality Report"
-    )
-
-
-    quality_rows = []
-
-
-    for column in df.columns:
-
-        missing = int(
-            df[column]
-            .isnull()
-            .sum()
-        )
-
-
-        missing_percentage = (
-            missing
-            /
-            len(df)
-            *
-            100
-            if len(df)
-            else 0
-        )
-
-
-        quality_rows.append(
-            {
-                "Column": column,
-
-                "Missing": missing,
-
-                "Missing %": round(
-                    missing_percentage,
-                    2
-                ),
-
-                "Blank": (
-                    quality[
-                        "blank_by_column"
-                    ]
-                    .get(
-                        column,
-                        0
-                    )
-                ),
-
-                "Unique": int(
-                    df[column]
-                    .nunique(
-                        dropna=True
-                    )
-                ),
-
-                "Data Type": str(
-                    df[column].dtype
-                )
-            }
-        )
-
-
-    quality_df = (
-        pd.DataFrame(
-            quality_rows
-        )
-    )
-
-
-    st.dataframe(
-        quality_df,
-        width="stretch",
-        hide_index=True
-    )
-
-
-    q1, q2 = (
-        st.columns(2)
-    )
-
-
-    with q1:
-
-        st.metric(
-            "Duplicate Rows",
-            quality[
-                "duplicate_rows"
-            ]
-        )
-
-
-    with q2:
-
-        st.metric(
-            "Total Missing Values",
-            quality[
-                "missing_values"
-            ]
-        )
-
-
-    if (
-        quality[
-            "missing_values"
-        ]
-        == 0
-        and
-        quality[
-            "duplicate_rows"
-        ]
-        == 0
-    ):
-
-        st.success(
-            "✓ No obvious missing-value or duplicate issues detected."
-        )
-
-
-# ============================================================
-# 17. DATA CLEANING
-# ============================================================
-
-with cleaning_tab:
-
-    st.subheader(
-        "🧹 Data Cleaning Workspace"
-    )
-
-    st.caption(
-        "Choose the cleaning operations you want Analytoka AI "
-        "to apply to the working copy."
-    )
-
-    st.warning(
-        "Your original uploaded dataset is never modified."
-    )
-
-
-    before1, before2 = (
-        st.columns(2)
-    )
-
-
-    with before1:
-
-        st.metric(
-            "Current Rows",
-            f"{len(df):,}"
-        )
-
-
-    with before2:
-
-        st.metric(
-            "Current Missing Values",
-            f"{int(df.isnull().sum().sum()):,}"
-        )
-
-
-    st.divider()
-
-
-    # --------------------------------------------------------
-    # CLEANING OPTIONS
-    # --------------------------------------------------------
-
-    remove_dupes = (
-        st.checkbox(
-            "Remove duplicate rows"
-        )
-    )
-
-
-    trim_spaces = (
-        st.checkbox(
-            "Trim leading/trailing spaces from text"
-        )
-    )
-
-
-    remove_empty = (
-        st.checkbox(
-            "Remove completely empty columns"
-        )
-    )
-
-
-    fill_text = (
-        st.checkbox(
-            "Fill missing text values"
-        )
-    )
-
-
-    text_fill_value = (
-        st.text_input(
-            "Text replacement value",
-            value="Unknown",
-            disabled=not fill_text
-        )
-    )
-
-
-    fill_numeric = (
-        st.checkbox(
-            "Fill missing numeric values using median"
-        )
-    )
-
-
-    drop_missing = (
-        st.checkbox(
-            "Drop rows that still contain missing values"
-        )
-    )
-
-
-    st.divider()
-
-
-    # --------------------------------------------------------
-    # APPLY CLEANING
-    # --------------------------------------------------------
-
-    if st.button(
-        "🧹 Apply Cleaning",
-        type="primary"
-    ):
-
-        cleaned_df = (
-            df.copy()
-        )
-
-        new_history = []
-
-
-        if remove_dupes:
-
-            cleaned_df, message = (
-                remove_duplicates(
-                    cleaned_df
-                )
-            )
-
-            new_history.append(
-                message
-            )
-
-
-        if trim_spaces:
-
-            cleaned_df, message = (
-                trim_text_values(
-                    cleaned_df
-                )
-            )
-
-            new_history.append(
-                message
-            )
-
-
-        if remove_empty:
-
-            cleaned_df, message = (
-                remove_empty_columns(
-                    cleaned_df
-                )
-            )
-
-            new_history.append(
-                message
-            )
-
-
-        if fill_text:
-
-            cleaned_df, message = (
-                fill_missing_text(
-                    cleaned_df,
-                    text_fill_value
-                )
-            )
-
-            new_history.append(
-                message
-            )
-
-
-        if fill_numeric:
-
-            cleaned_df, message = (
-                fill_numeric_with_median(
-                    cleaned_df
-                )
-            )
-
-            new_history.append(
-                message
-            )
-
-
-        if drop_missing:
-
-            cleaned_df, message = (
-                drop_missing_rows(
-                    cleaned_df
-                )
-            )
-
-            new_history.append(
-                message
-            )
-
-
-        if not new_history:
-
-            st.warning(
-                "Select at least one cleaning action."
-            )
-
-
-        else:
-
-            active_chat[
-                "cleaned_df"
-            ] = cleaned_df
-
-
-            active_chat[
-                "cleaning_history"
-            ].extend(
-                new_history
-            )
-
-
-            working_path = (
-                save_working_dataset(
-                    cleaned_df,
-                    extension,
-                    active_chat[
-                        "sheet_name"
-                    ]
-                )
-            )
-
-
-            active_chat[
-                "working_file_path"
-            ] = working_path
-
-
-            st.success(
-                "✓ Cleaning completed successfully."
-            )
-
-            st.rerun()
-
-
-    # --------------------------------------------------------
-    # RESET ORIGINAL
-    # --------------------------------------------------------
-
-    if (
-        active_chat[
-            "cleaned_df"
-        ]
-        is not None
-    ):
-
-        if st.button(
-            "↩️ Reset to Original"
-        ):
-
-            active_chat[
-                "cleaned_df"
-            ] = None
-
-
-            active_chat[
-                "working_file_path"
-            ] = active_chat[
-                "original_file_path"
-            ]
-
-
-            active_chat[
-                "cleaning_history"
-            ] = []
-
-
-            st.rerun()
-
-
-    # --------------------------------------------------------
-    # CLEANING HISTORY
-    # --------------------------------------------------------
-
-    if active_chat[
-        "cleaning_history"
-    ]:
-
-        st.divider()
-
-        st.subheader(
-            "📜 Cleaning History"
-        )
-
-
-        for index, item in enumerate(
-            active_chat[
-                "cleaning_history"
-            ],
-            start=1
-        ):
-
-            st.write(
-                f"**{index}.** {item}"
-            )
-
-
-    # --------------------------------------------------------
-    # DOWNLOAD
-    # --------------------------------------------------------
-
-    if (
-        active_chat[
-            "cleaned_df"
-        ]
-        is not None
-    ):
-
-        st.divider()
-
-        st.subheader(
-            "⬇️ Download Cleaned Data"
-        )
-
-
-        cleaned_df = (
-            active_chat[
-                "cleaned_df"
-            ]
-        )
-
-
-        csv_data = (
-            dataframe_to_csv(
-                cleaned_df
-            )
-        )
-
-
-        excel_data = (
-            dataframe_to_excel(
-                cleaned_df,
-                active_chat[
-                    "sheet_name"
-                ]
-                or
-                "Cleaned Data"
-            )
-        )
-
-
-        download1, download2 = (
-            st.columns(2)
-        )
-
-
-        with download1:
-
-            st.download_button(
-                "⬇️ Download CSV",
-                data=csv_data,
-                file_name=(
-                    "Analytoka AI_cleaned_dataset.csv"
-                ),
-                mime="text/csv",
-                width="stretch"
-            )
-
-
-        with download2:
-
-            st.download_button(
-                "⬇️ Download Excel",
-                data=excel_data,
-                file_name=(
-                    "Analytoka AI_cleaned_dataset.xlsx"
-                ),
-                mime=(
-                    "application/"
-                    "vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet"
-                ),
-                width="stretch"
-            )
-
-
-# ============================================================
-# 18. AI ANALYST
-# ============================================================
-
-st.divider()
-
-st.markdown(
-    "## 🤖 Ask Analytoka AI"
-)
-
-
-if (
-    active_chat[
-        "cleaned_df"
-    ]
-    is not None
-):
-
-    st.caption(
-        "I'm analyzing your cleaned working dataset."
-    )
-
-
-else:
-
-    st.caption(
-        "I'm analyzing your original dataset."
-    )
-
-
-# ============================================================
-# 19. SUGGESTED QUESTIONS
-# ============================================================
-
-example1, example2, example3 = (
-    st.columns(3)
-)
-
-
-with example1:
-
-    st.info(
-        "💡 Perform a full exploratory analysis."
-    )
-
-
-with example2:
-
-    st.info(
-        "📈 Plot the monthly revenue trend."
-    )
-
-
-with example3:
-
-    st.info(
-        "🔗 Analyze correlations and show a heatmap."
-    )
-
-
-# ============================================================
-# 20. CHAT HISTORY
-# ============================================================
-
-for message in (
-    active_chat[
-        "messages"
-    ]
-):
-
-    with st.chat_message(
-        message[
-            "role"
-        ]
-    ):
-
-        st.markdown(
-            message[
-                "content"
-            ]
-        )
-
-
-        # ----------------------------------------------------
-        # HISTORICAL CHARTS
-        # ----------------------------------------------------
-
-        for chart in (
-            message.get(
-                "charts",
-                []
-            )
-        ):
-
-            chart_path = (
-                chart.get(
-                    "path"
-                )
-            )
-
-
-            if (
-                chart_path
-                and
-                os.path.exists(
-                    chart_path
-                )
-            ):
-
-                st.image(
-                    chart_path,
-                    caption=(
-                        chart.get(
-                            "title"
-                        )
-                    ),
-                    width="stretch"
-                )
-
-
-# ============================================================
-# 21. CHAT INPUT
-# ============================================================
-
-question = (
-    st.chat_input(
-        "Ask Analytoka AI about your data..."
-    )
-)
-
-
-# ============================================================
-# 22. RUN AGENT
-# ============================================================
-
-if question:
-
-    # --------------------------------------------------------
-    # GENERATE CHAT TITLE
-    # --------------------------------------------------------
-
-    if (
-        active_chat[
-            "title"
-        ]
-        ==
-        "New Chat"
-    ):
-
-        active_chat[
-            "title"
-        ] = (
-            generate_chat_title(
-                question
-            )
-        )
-
-
-    # --------------------------------------------------------
-    # SAVE USER MESSAGE
-    # --------------------------------------------------------
-
-    active_chat[
-        "messages"
-    ].append(
-        {
-            "role": "user",
-            "content": question
-        }
-    )
-
-
-    # --------------------------------------------------------
-    # SHOW USER MESSAGE
-    # --------------------------------------------------------
-
-    with st.chat_message(
-        "user"
-    ):
-
-        st.markdown(
-            question
-        )
-
-
-    # --------------------------------------------------------
-    # RUN Analytoka AI AGENT
-    # --------------------------------------------------------
-
-    with st.chat_message(
-        "assistant"
-    ):
-
-        with st.spinner(
-            "Analytoka AI is analyzing your data..."
-        ):
-
-            analysis_file = (
-                active_chat[
-                    "working_file_path"
-                ]
-            )
-
-
-            result = (
-                run_agent(
-                    question=question,
-                    file_path=analysis_file,
-                    sheet_name=(
-                        active_chat[
-                            "sheet_name"
-                        ]
-                    )
-                )
-            )
-
-
-        # ----------------------------------------------------
-        # RESPONSE
-        # ----------------------------------------------------
-
-        if isinstance(
-            result,
-            dict
-        ):
-
-            answer = (
-                result.get(
-                    "answer",
-                    "Analysis completed."
-                )
-            )
-
-
-            charts = (
-                result.get(
-                    "charts",
-                    []
-                )
-            )
-
-
-        else:
-
-            answer = str(
-                result
-            )
-
-            charts = []
-
-
-        # ----------------------------------------------------
-        # DISPLAY ANSWER
-        # ----------------------------------------------------
-
-        st.markdown(
-            answer
-        )
-
-
-        # ----------------------------------------------------
-        # DISPLAY CHARTS
-        # ----------------------------------------------------
-
-        for chart in charts:
-
-            chart_path = (
-                chart.get(
-                    "path"
-                )
-            )
-
-
-            if (
-                chart_path
-                and
-                os.path.exists(
-                    chart_path
-                )
-            ):
-
-                st.image(
-                    chart_path,
-                    caption=(
-                        chart.get(
-                            "title"
-                        )
-                    ),
-                    width="stretch"
-                )
-
-
-    # --------------------------------------------------------
-    # SAVE AI RESPONSE
-    # --------------------------------------------------------
-
-    active_chat[
-        "messages"
-    ].append(
-        {
-            "role": "assistant",
-            "content": answer,
-            "charts": charts
-        }
-    )
-
-
-    st.rerun()
-
-
-# ============================================================
-# 23. FOOTER
-# ============================================================
-
-show_footer()
+footer()

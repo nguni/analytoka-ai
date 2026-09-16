@@ -23,7 +23,7 @@ def profile_data_quality(df: pd.DataFrame) -> dict:
 
     for column in df.columns:
 
-        if pd.api.types.is_object_dtype(df[column]):
+        if pd.api.types.is_object_dtype(df[column]) or pd.api.types.is_string_dtype(df[column]):
 
             blank_count = (
                 df[column]
@@ -181,6 +181,9 @@ def fill_numeric_with_median(
                 cleaned_df[column]
                 .median()
             )
+
+            if pd.isna(median):
+                continue
 
             cleaned_df[column] = (
                 cleaned_df[column]

@@ -14,21 +14,9 @@ from tools.data_tools import (
 # OUTPUT DIRECTORY
 # ============================================================
 
-PROJECT_ROOT = os.path.dirname(
-    os.path.dirname(
-        os.path.abspath(__file__)
-    )
-)
-
-OUTPUT_DIRECTORY = os.path.join(
-    PROJECT_ROOT,
-    "outputs"
-)
-
-os.makedirs(
-    OUTPUT_DIRECTORY,
-    exist_ok=True
-)
+from workspace import ROOT
+OUTPUT_DIRECTORY = str(ROOT / "charts")
+os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
 
 
 # ============================================================
