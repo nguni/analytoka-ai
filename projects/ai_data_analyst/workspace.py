@@ -24,13 +24,16 @@ def save_chat(chat):
         db.execute("INSERT OR REPLACE INTO chats VALUES (?, ?)", (chat["id"], json.dumps(chat)))
 
 
-def list_chats():
+def list_chats(owner=None):
     with connect() as db:
-        return [json.loads(row[0]) for row in db.execute("SELECT body FROM chats ORDER BY rowid DESC")]
+        chats = [json.loads(row[0]) for row in db.execute("SELECT body FROM chats ORDER BY rowid DESC")]
+    if owner is None:
+        return chats
+    return [chat for chat in chats if chat.get("owner") == owner]
 
 
 def new_chat():
-    return {"id": uuid.uuid4().hex, "title": "New Chat", "messages": [], "datasets": {}, "active": None, "metadata": "", "history": []}
+    return {"id": uuid.uuid4().hex, "title": "New Chat", "messages": [], "datasets": {}, "relationships": [], "active": None, "metadata": "", "history": []}
 
 
 def save_frame(df):
@@ -62,6 +65,81 @@ def import_upload(chat, name, data):
     for key in ("analysis", "summary", "recommendations"):
         chat.pop(key, None)
     chat["uploads"].append(digest)
+    chat["relationships"] = infer_relationships(chat["datasets"])
+
+
+def _relationship_candidates(left_name, left_frame, right_name, right_frame):
+    candidates = []
+    for left_column in left_frame.columns:
+        left_values = left_frame[left_column].dropna()
+        if left_values.empty:
+            continue
+        for right_column in right_frame.columns:
+            right_values = right_frame[right_column].dropna()
+            if right_values.empty:
+                continue
+            left_key = normalize_column(left_column)
+            right_key = normalize_column(right_column)
+            if left_key != right_key and left_key not in {"id", "key"} and right_key not in {"id", "key"}:
+                continue
+            comparable_left = set(left_values.astype(str).head(10000))
+            comparable_right = set(right_values.astype(str).head(10000))
+            overlap = len(comparable_left & comparable_right) / max(1, min(len(comparable_left), len(comparable_right)))
+            if overlap < 0.5:
+                continue
+            left_unique = left_values.nunique() == len(left_values)
+            right_unique = right_values.nunique() == len(right_values)
+            if left_unique and not right_unique:
+                one_name, one_column, many_name, many_column = left_name, left_column, right_name, right_column
+            elif right_unique and not left_unique:
+                one_name, one_column, many_name, many_column = right_name, right_column, left_name, left_column
+            else:
+                one_name, one_column, many_name, many_column = left_name, left_column, right_name, right_column
+            candidates.append({
+                "one": one_name,
+                "one_column": str(one_column),
+                "many": many_name,
+                "many_column": str(many_column),
+                "cardinality": "one-to-many" if left_unique != right_unique else "many-to-many",
+                "confidence": round(min(0.99, overlap + (0.2 if left_key == right_key else 0)), 2),
+                "source": "suggested",
+            })
+    return candidates
+
+
+def normalize_column(column):
+    return re.sub(r"[^a-z0-9]+", "_", str(column).strip().casefold()).strip("_")
+
+
+def infer_relationships(datasets):
+    relationships = []
+    names = list(datasets)
+    for left_index, left_name in enumerate(names):
+        left_frame = pd.read_parquet(datasets[left_name]["path"])
+        for right_name in names[left_index + 1:]:
+            right_frame = pd.read_parquet(datasets[right_name]["path"])
+            candidates = _relationship_candidates(left_name, left_frame, right_name, right_frame)
+            if candidates:
+                relationships.append(max(candidates, key=lambda item: item["confidence"]))
+    return relationships
+
+
+def add_relationship(chat, one, one_column, many, many_column, cardinality="one-to-many"):
+    relationship = {
+        "one": one,
+        "one_column": one_column,
+        "many": many,
+        "many_column": many_column,
+        "cardinality": cardinality,
+        "confidence": 1.0,
+        "source": "manual",
+    }
+    chat.setdefault("relationships", [])
+    chat["relationships"] = [
+        item for item in chat["relationships"]
+        if not (item["one"] == one and item["one_column"] == one_column and item["many"] == many and item["many_column"] == many_column)
+    ] + [relationship]
+    return relationship
 
 
 def transform(df, column, action, value=""):
@@ -129,3 +207,36 @@ def retrieve_metadata(question, metadata, limit=8):
     lines = [line for line in metadata.splitlines() if line.strip()]
     ranked = sorted(enumerate(lines), key=lambda item: (-len(terms & set(re.findall(r"\w+", item[1].casefold()))), item[0]))
     return "\n".join(line[:1000] for _, line in ranked[:limit])
+
+
+def generate_question_starters(frame):
+    """Create plain-language questions from the active source's fields."""
+    numeric = list(frame.select_dtypes(include="number").columns)
+    categorical = [
+        column for column in frame.columns
+        if column not in numeric and 1 < frame[column].nunique(dropna=True) <= 30
+    ]
+    date_columns = []
+    for column in frame.columns:
+        if column in numeric:
+            continue
+        parsed = pd.to_datetime(frame[column], errors="coerce", format="mixed")
+        if parsed.notna().sum() >= 2 and parsed.notna().mean() >= 0.8:
+            date_columns.append(column)
+
+    def label(column):
+        return str(column).replace("_", " ").strip().lower()
+
+    starters = ["What are the most important things I should know about this information?"]
+    if numeric and categorical:
+        starters.append(f"Which {label(categorical[0])} is performing best for {label(numeric[0])}?")
+        starters.append(f"How does {label(numeric[0])} differ across {label(categorical[0])}?")
+    elif numeric:
+        starters.append(f"What is the overall {label(numeric[0])}, and are there any unusual results?")
+    if date_columns and numeric:
+        starters.append(f"How has {label(numeric[0])} changed over {label(date_columns[0])}?")
+    if categorical:
+        starters.append(f"What patterns can you find in {label(categorical[0])}?")
+    if frame.isna().any().any():
+        starters.append("Are there information gaps that could affect my decisions?")
+    return starters[:5]

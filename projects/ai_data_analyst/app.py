@@ -1,22 +1,34 @@
 """Analytoka AI: persistent local data analysis workspace."""
 import json
+from html import escape
 from pathlib import Path
 import pandas as pd
 import streamlit as st
 import altair as alt
 from agent_groq import run_agent
-from workspace import (new_chat, list_chats, save_chat, import_upload, save_frame,
-                       transform, apply_change, join_frames)
+from workspace import (new_chat, list_chats, save_chat as persist_chat, import_upload, save_frame,
+                       transform, apply_change, join_frames, add_relationship, generate_question_starters)
 from tools.cleaning_tools import (profile_data_quality, dataframe_to_excel, trim_text_values,
     remove_duplicates, drop_missing_rows, fill_missing_text, fill_numeric_with_median, remove_empty_columns)
 from tools.advanced_tools import advanced_analysis
 from reports import markdown_report, pdf_report
 from ui import inject_styles, brand, topline, welcome, workflow, dataset_heading, overview_banner, footer
 
-st.set_page_config(page_title="Analytoka AI · Data studio", page_icon="◧", layout="wide")
+st.set_page_config(page_title="Analytoka AI · Data studio", page_icon=str(Path(__file__).parent / "assets" / "favicon.svg"), layout="wide")
 inject_styles()
+
+is_signed_in = bool(getattr(st.user, "is_logged_in", False))
+user_identity = ((getattr(st.user, "email", None) or getattr(st.user, "sub", None))
+                 if is_signed_in else None)
+
+def save_chat(chat):
+    if is_signed_in:
+        chat["owner"] = user_identity
+        persist_chat(chat)
+
 if "chats" not in st.session_state:
-    st.session_state.chats = {c["id"]: c for c in list_chats()}
+    saved_chats = list_chats(owner=user_identity) if is_signed_in else []
+    st.session_state.chats = {c["id"]: c for c in saved_chats}
 if not st.session_state.chats:
     chat = new_chat()
     st.session_state.chats[chat["id"]] = chat
@@ -31,44 +43,68 @@ with st.sidebar:
         st.session_state.active_chat = chat["id"]
         save_chat(chat)
         st.rerun()
-    st.markdown('<div class="side-label">YOUR WORKSPACE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="side-label">CONVERSATIONS</div>', unsafe_allow_html=True)
     ids = list(st.session_state.chats)
     chat_titles = {k: st.session_state.chats[k]["title"] for k in ids}
-    selected = st.selectbox("Chats", ids, index=ids.index(st.session_state.active_chat),
-                            format_func=lambda k, labels=chat_titles: labels[k])
-    st.session_state.active_chat = selected
+    st.caption(f"{len(ids)} saved conversation{'s' if len(ids) != 1 else ''}" if is_signed_in else "History is not saved in guest mode")
+    for chat_id in ids:
+        title = chat_titles[chat_id] or "Untitled conversation"
+        if st.button(title, key=f"conversation_{chat_id}", type="primary" if chat_id == st.session_state.active_chat else "secondary", width="stretch"):
+            st.session_state.active_chat = chat_id
+            st.rerun()
+    selected = st.session_state.active_chat
     chat = st.session_state.chats[selected]
-    with st.expander("AI settings", expanded=False):
-        provider = st.selectbox("AI provider", ["Groq", "Gemini"])
-        model = st.text_input("Model", value="openai/gpt-oss-120b" if provider == "Groq" else "gemini-3.6-flash", key=f"model_{provider}")
+    chat.setdefault("relationships", [])
     with st.expander("Add data", expanded=False):
-        files = st.file_uploader("Add CSV or Excel files", type=["csv", "xlsx", "xls"],
+        st.caption("Upload one or more spreadsheets. Every worksheet stays available.")
+        files = st.file_uploader("Upload spreadsheets (CSV or Excel)", type=["csv", "xlsx", "xls"],
                                  accept_multiple_files=True, key=f"uploads_{selected}")
     for uploaded in files:
         try:
             import_upload(chat, uploaded.name, uploaded.getvalue())
         except Exception as error:
             st.error(f"{uploaded.name}: {error}")
+    with st.expander("Assistant settings", expanded=False):
+        st.caption("Choose the assistant that will answer your questions.")
+        provider = st.selectbox("Choose your AI assistant", ["Groq", "Gemini"])
+        model = st.text_input("Advanced model (optional)", value="openai/gpt-oss-120b" if provider == "Groq" else "gemini-3.6-flash", key=f"model_{provider}")
+    with st.expander("What can I ask?", expanded=False):
+        st.caption("Try questions about performance, trends, unusual results, gaps, comparisons, or recommendations.")
     if chat["datasets"]:
         names = list(chat["datasets"])
-        active = st.selectbox("Active dataset / worksheet", names,
+        active = st.selectbox("Data to discuss", names,
                              index=names.index(chat["active"]), key=f"dataset_{selected}_{len(names)}")
         if active != chat["active"]:
             for key in ("analysis", "summary", "recommendations"):
                 chat.pop(key, None)
         chat["active"] = active
-    if st.button("Clear conversation"):
-        chat["messages"] = []
-        save_chat(chat)
-        st.rerun()
+    with st.expander("Conversation options"):
+        if st.button("Clear conversation"):
+            chat["messages"] = []
+            save_chat(chat)
+            st.rerun()
+    st.markdown('<div class="sidebar-spacer"></div>', unsafe_allow_html=True)
+    if is_signed_in:
+        account_name = getattr(st.user, "name", None) or user_identity
+        st.markdown(f'<div class="account-panel signed-in"><strong>{escape(account_name)}</strong><span>Signed in · conversations are saved to your account.</span></div>', unsafe_allow_html=True)
+        if st.button("Sign out", width="stretch", icon=":material/logout:"):
+            st.logout()
+    else:
+        st.markdown('<div class="account-panel"><strong>Working as a guest</strong><span>Your data and questions stay available while this browser session is open.</span></div>', unsafe_allow_html=True)
+        if st.button("Sign in or create an account", width="stretch", icon=":material/login:"):
+            try:
+                st.login()
+            except Exception:
+                st.warning("Sign-in is not configured yet. Add the Streamlit authentication settings described in the README.")
+        st.caption("Sign in to save and return to conversations.")
     save_chat(chat)
     st.markdown('<div class="side-note"><strong>A space for better questions.</strong><br>Your datasets, conversations, and discoveries. All in one place.</div>', unsafe_allow_html=True)
 
 topline(bool(chat["datasets"]))
 if not chat["datasets"]:
     welcome()
-    st.markdown('<div class="section-title">Start with a dataset</div><div class="section-note">Your next insight is already in there.</div>', unsafe_allow_html=True)
-    incoming = st.file_uploader("Upload a CSV or Excel workbook", type=["csv", "xlsx", "xls"], accept_multiple_files=True, key=f"welcome_upload_{selected}")
+    st.markdown('<div class="section-title">Start with your data</div><div class="section-note">Upload a spreadsheet and let us find the story inside it.</div>', unsafe_allow_html=True)
+    incoming = st.file_uploader("Upload a spreadsheet (CSV or Excel)", type=["csv", "xlsx", "xls"], accept_multiple_files=True, key=f"welcome_upload_{selected}")
     for uploaded in incoming:
         try:
             import_upload(chat, uploaded.name, uploaded.getvalue())
@@ -85,7 +121,7 @@ if not chat["datasets"]:
             save_chat(chat)
             st.rerun()
     with note:
-        st.caption("Just looking around? Take the studio for a spin with a sample dataset.")
+        st.caption("Just looking around? Try the sample data to see how it works.")
     workflow()
     footer()
     st.stop()
@@ -106,23 +142,83 @@ dataset = chat["datasets"][chat["active"]]
 df = read_frame(dataset["path"])
 dataset_heading(chat["active"], len(chat["datasets"]))
 a, b, c, d = st.columns(4)
-a.metric("Rows", f"{len(df):,}")
-b.metric("Columns", len(df.columns))
-c.metric("Missing cells", int(df.isna().sum().sum()))
-d.metric("Duplicate rows", int(df.duplicated().sum()))
-preview, clean, combine, analytics, visuals, dictionary, reports, conversation = st.tabs(
-    ["Explore", "Clean", "Combine", "Analytics", "Charts", "Data dictionary", "Reports", "Chat"])
+a.metric("Records", f"{len(df):,}")
+b.metric("Fields", len(df.columns))
+c.metric("Data gaps", int(df.isna().sum().sum()))
+d.metric("Repeated records", int(df.duplicated().sum()))
+conversation, preview, model_view, clean, combine, analytics, visuals, dictionary, reports = st.tabs(
+    ["Ask AI", "Explore", "Model", "Improve data", "Combine data", "Business analysis", "Dashboard", "Definitions", "Reports"])
 
 with preview:
-    overview_banner(df)
+    explore_source = st.selectbox(
+        "Choose a sheet or source to explore",
+        list(chat["datasets"]),
+        index=list(chat["datasets"]).index(chat["active"]),
+        format_func=lambda name: name.rsplit(" [", 1)[0],
+        key=f"explore_source_{selected}",
+    )
+    explore_df = read_frame(chat["datasets"][explore_source]["path"])
+    overview_banner(explore_df)
     st.markdown('<div class="section-title">Inside your dataset</div><div class="section-note">The details behind the bigger picture.</div>', unsafe_allow_html=True)
-    st.dataframe(df.head(1000), hide_index=True, width="stretch")
+    st.dataframe(explore_df.head(1000), hide_index=True, width="stretch")
     st.caption("Preview limited to 1,000 rows; calculations use the full dataset.")
     with st.expander("Field guide · column types and completeness"):
-        st.dataframe(pd.DataFrame({"type": df.dtypes.astype(str), "missing": df.isna().sum(), "unique": df.nunique()}), width="stretch")
-    if len(df.columns):
+        st.dataframe(pd.DataFrame({"type": explore_df.dtypes.astype(str), "missing": explore_df.isna().sum(), "unique": explore_df.nunique()}), width="stretch")
+    if len(explore_df.columns):
         with st.expander("Descriptive statistics · distributions at a glance"):
-            st.dataframe(df.describe(include="all").astype(str), width="stretch")
+            st.dataframe(explore_df.describe(include="all").astype(str), width="stretch")
+
+with model_view:
+    st.subheader("How your data connects")
+    st.caption("Suggested links are based on matching fields and values. Review them before combining data.")
+    relationships = chat.get("relationships", [])
+    if relationships:
+        relationship_rows = [
+            {
+                "From": f"{item['one']} · {item['one_column']}",
+                "To": f"{item['many']} · {item['many_column']}",
+                "Relationship": item["cardinality"],
+                "Confidence": f"{item['confidence']:.0%}",
+                "How found": "Suggested automatically" if item.get("source") == "suggested" else "Added by you",
+            }
+            for item in relationships
+        ]
+        st.dataframe(pd.DataFrame(relationship_rows), hide_index=True, width="stretch")
+        st.markdown("**Model canvas**")
+        connected_names = set()
+        model_links = []
+        for item in relationships:
+            connected_names.update((item["one"], item["many"]))
+            model_links.append(
+                f'<div class="model-link"><div class="model-node"><strong>{escape(item["one"].rsplit(" [", 1)[0])}</strong><small class="model-field model-key">key · {escape(item["one_column"])}</small></div>'
+                f'<div class="model-arrow"><b>&rarr;</b><small>{escape(item["cardinality"])}<br>{escape(item["one_column"])} = {escape(item["many_column"])}</small></div>'
+                f'<div class="model-node"><strong>{escape(item["many"].rsplit(" [", 1)[0])}</strong><small class="model-field model-key">key · {escape(item["many_column"])}</small></div></div>'
+            )
+        for name in chat["datasets"]:
+            if name not in connected_names:
+                columns = list(pd.read_parquet(chat["datasets"][name]["path"]).columns)
+                fields = "".join(f'<small class="model-field">{escape(str(column))}</small>' for column in columns[:8])
+                model_links.append(f'<div class="model-node model-unlinked"><strong>{escape(name.rsplit(" [", 1)[0])}</strong>{fields}</div>')
+        st.markdown(f'<div class="model-map">{"".join(model_links)}</div>', unsafe_allow_html=True)
+    else:
+        st.info("No likely relationships found yet. Add another spreadsheet or create one below.")
+
+    if len(chat["datasets"]) >= 2:
+        st.markdown("**Create a relationship**")
+        model_left, model_right = st.columns(2)
+        source_names = list(chat["datasets"])
+        one_name = model_left.selectbox("First source", source_names, key=f"model_one_{selected}")
+        many_name = model_right.selectbox("Second source", [name for name in source_names if name != one_name], key=f"model_many_{selected}")
+        one_frame = pd.read_parquet(chat["datasets"][one_name]["path"])
+        many_frame = pd.read_parquet(chat["datasets"][many_name]["path"])
+        relation_left, relation_right, relation_kind = st.columns(3)
+        one_column = relation_left.selectbox("Matching field", list(one_frame.columns), key=f"model_one_col_{selected}")
+        many_column = relation_right.selectbox("Matching field in second source", list(many_frame.columns), key=f"model_many_col_{selected}")
+        cardinality = relation_kind.selectbox("How records connect", ["one-to-many", "one-to-one", "many-to-many"], key=f"model_cardinality_{selected}")
+        if st.button("Add relationship", key=f"add_relationship_{selected}"):
+            add_relationship(chat, one_name, one_column, many_name, many_column, cardinality)
+            save_chat(chat)
+            st.rerun()
 
 with clean:
     st.subheader("A little cleanup. A lot more confidence.")
@@ -247,47 +343,135 @@ with analytics:
             st.download_button("Export analysis JSON", json.dumps(result, indent=2), "analysis.json")
 
 with visuals:
-    st.subheader("Give your numbers a point of view.")
-    st.caption("Choose a perspective. Explore the story in your data.")
-    if len(df.columns):
-        x = st.selectbox("X axis", list(df.columns))
-        y = st.selectbox("Y axis", [None] + numeric)
-        kind = st.selectbox("Chart", ["Auto", "Bar", "Line", "Area", "Scatter", "Histogram", "Box plot"])
-        chosen = kind
-        if chosen == "Auto":
-            if y is None:
-                chosen = "Histogram" if x in numeric else "Bar"
-            elif x in numeric:
-                chosen = "Scatter"
-            else:
-                dates = pd.to_datetime(df[x].head(100).astype(str), errors="coerce")
-                chosen = "Line" if len(dates) and dates.notna().mean() > .9 else "Bar"
-        try:
-            chart_df = df.head(5000).copy()
-            chart_df.columns = [f"c{i}" for i in range(len(df.columns))]
-            xc = f"c{list(df.columns).index(x)}"
-            yc = f"c{list(df.columns).index(y)}" if y else None
-            base = alt.Chart(chart_df)
-            if chosen == "Histogram":
-                chart = base.mark_bar().encode(x=alt.X(xc, type="quantitative", bin=True, title=x), y="count()")
-            elif chosen in {"Line", "Area"}:
-                chart_df[xc] = pd.to_datetime(chart_df[xc], errors="raise")
-                base = alt.Chart(chart_df)
-                chart = (base.mark_line() if chosen == "Line" else base.mark_area()).encode(x=alt.X(xc, type="temporal", title=x), y=alt.Y(yc, type="quantitative", aggregate="sum", title=y) if yc else alt.Y("count()"))
-            elif chosen == "Scatter":
-                if not yc:
-                    raise ValueError("Choose a Y axis for a scatter plot")
-                chart = base.mark_circle().encode(x=alt.X(xc, type="quantitative", title=x), y=alt.Y(yc, type="quantitative", title=y))
-            elif chosen == "Box plot":
-                if not yc:
-                    raise ValueError("Choose a numeric Y axis")
-                chart = base.mark_boxplot().encode(x=alt.X(xc, type="nominal", title=x), y=alt.Y(yc, type="quantitative", title=y))
-            else:
-                chart = base.mark_bar().encode(x=alt.X(xc, type="nominal", title=x), y=alt.Y(yc, type="quantitative", aggregate="sum", title=y) if yc else alt.Y("count()"))
-            st.altair_chart(chart.properties(height=340).configure(background="#f7f7f2").configure_range(category=["#294b53", "#dc784c", "#a7bfae", "#caa46d", "#71899a"]).configure_axis(gridColor="#e2e5dd", domainColor="#d5dcd2", labelColor="#697681", titleColor="#294b53").configure_view(strokeWidth=0).interactive(), width="stretch")
-            st.caption(f"{chosen} chart · first {min(len(df), 5000):,} rows. Chat-generated charts use the full dataset.")
-        except Exception as error:
-            st.info(str(error))
+    st.subheader("Your business dashboard")
+    st.caption("The dashboard adapts to your data. Use the filters to focus the story.")
+
+    numeric = list(df.select_dtypes(include="number").columns)
+    date_candidates = []
+    for column in df.columns:
+        if column in numeric:
+            continue
+        parsed = pd.to_datetime(df[column], errors="coerce", format="mixed")
+        if parsed.notna().sum() >= 2 and parsed.notna().mean() >= 0.8:
+            date_candidates.append(column)
+
+    categorical = [
+        column for column in df.columns
+        if column not in numeric and column not in date_candidates
+        and 1 < df[column].nunique(dropna=True) <= 30
+    ][:3]
+    filtered_df = df.copy()
+
+    with st.container(border=True):
+        st.markdown("**Focus the view**")
+        filter_columns = st.columns(min(3, max(1, len(date_candidates) + len(categorical))))
+        filter_index = 0
+        if date_candidates:
+            date_column = filter_columns[filter_index].selectbox("Time period", date_candidates, key=f"dashboard_date_{selected}")
+            filter_index += 1
+            parsed_dates = pd.to_datetime(df[date_column], errors="coerce", format="mixed")
+            valid_dates = parsed_dates.dropna()
+            start_date = valid_dates.min().date()
+            end_date = valid_dates.max().date()
+            chosen_dates = st.date_input("From and to", (start_date, end_date), min_value=start_date, max_value=end_date, key=f"dashboard_range_{selected}")
+            if isinstance(chosen_dates, tuple) and len(chosen_dates) == 2:
+                filtered_df = filtered_df.loc[parsed_dates.dt.date.between(chosen_dates[0], chosen_dates[1])]
+        for column in categorical:
+            if filter_index >= len(filter_columns):
+                break
+            values = sorted(df[column].dropna().astype(str).unique().tolist())
+            selected_values = filter_columns[filter_index].multiselect(column.replace("_", " ").title(), values, default=values, key=f"dashboard_filter_{selected}_{column}")
+            filter_index += 1
+            if selected_values:
+                filtered_df = filtered_df[filtered_df[column].astype(str).isin(selected_values)]
+
+    if len(filtered_df) == 0:
+        st.warning("No data matches these filters. Try widening the view.")
+    else:
+        st.caption(f"Showing {len(filtered_df):,} of {len(df):,} records")
+        kpi_columns = st.columns(min(4, max(1, len(numeric) + 1)))
+        kpi_columns[0].metric("Records in view", f"{len(filtered_df):,}", border=True)
+        for index, column in enumerate(numeric[:3], start=1):
+            value = filtered_df[column].sum()
+            label = column.replace("_", " ").title()
+            kpi_columns[index].metric(label, f"{value:,.2f}" if isinstance(value, float) else f"{value:,}", border=True)
+
+        chart_config = dict(
+            background="#f7f7f2",
+            axis=alt.AxisConfig(gridColor="#e2e5dd", domainColor="#d5dcd2", labelColor="#697681", titleColor="#294b53"),
+            view=alt.ViewConfig(strokeWidth=0),
+        )
+        chart_columns = st.columns(2)
+        if date_candidates and numeric:
+            trend_date = date_candidates[0]
+            trend_metric = numeric[0]
+            trend_df = filtered_df[[trend_date, trend_metric]].copy()
+            trend_df[trend_date] = pd.to_datetime(trend_df[trend_date], errors="coerce", format="mixed")
+            trend_df = trend_df.dropna().groupby(pd.Grouper(key=trend_date, freq="MS"))[trend_metric].sum().reset_index()
+            trend_chart = alt.Chart(trend_df).mark_line(point=True, color="#d86d42").encode(
+                x=alt.X(f"{trend_date}:T", title="Time"),
+                y=alt.Y(f"{trend_metric}:Q", title=trend_metric.replace("_", " ").title()),
+                tooltip=[alt.Tooltip(f"{trend_date}:T", title="Time"), alt.Tooltip(f"{trend_metric}:Q", title=trend_metric.replace("_", " ").title(), format=",.2f")],
+            ).properties(height=300, title="How the main measure changed over time").configure(**chart_config)
+            with chart_columns[0]:
+                st.altair_chart(trend_chart, width="stretch")
+        if categorical and numeric:
+            group_column = categorical[0]
+            group_metric = numeric[0]
+            group_df = filtered_df.groupby(group_column, dropna=False)[group_metric].sum().nlargest(10).reset_index()
+            group_chart = alt.Chart(group_df).mark_bar(color="#294b53").encode(
+                x=alt.X(f"{group_metric}:Q", title=group_metric.replace("_", " ").title()),
+                y=alt.Y(f"{group_column}:N", sort="-x", title=group_column.replace("_", " ").title()),
+                tooltip=[group_column, alt.Tooltip(group_metric, format=",.2f")],
+            ).properties(height=300, title=f"Top {group_column.replace('_', ' ').title()} by {group_metric.replace('_', ' ').title()}").configure(**chart_config)
+            with chart_columns[1 if date_candidates and numeric else 0]:
+                st.altair_chart(group_chart, width="stretch")
+        elif len(numeric) >= 2:
+            scatter = alt.Chart(filtered_df.head(5000)).mark_circle(color="#d86d42", opacity=0.65).encode(
+                x=alt.X(f"{numeric[0]}:Q", title=numeric[0].replace("_", " ").title()),
+                y=alt.Y(f"{numeric[1]}:Q", title=numeric[1].replace("_", " ").title()),
+                tooltip=numeric[:2],
+            ).properties(height=300, title="How two measures move together").configure(**chart_config)
+            with chart_columns[0]:
+                st.altair_chart(scatter, width="stretch")
+
+        st.markdown("**Data behind the charts**")
+        st.dataframe(filtered_df.head(500), hide_index=True, width="stretch")
+
+        with st.expander("Build a custom chart or KPI"):
+            st.caption("Use this when you already know exactly what you want to compare.")
+            custom_columns = st.columns(3)
+            custom_x = custom_columns[0].selectbox("Compare by", list(filtered_df.columns), key=f"custom_x_{selected}")
+            custom_y = custom_columns[1].selectbox("Measure", [None] + numeric, key=f"custom_y_{selected}")
+            custom_kind = custom_columns[2].selectbox("View as", ["Bar", "Line", "Area", "Scatter", "Histogram", "Box plot"], key=f"custom_kind_{selected}")
+            if st.button("Show custom view", key=f"custom_chart_{selected}"):
+                chart_df = filtered_df.head(5000).copy()
+                if custom_kind == "Histogram":
+                    custom_chart = alt.Chart(chart_df).mark_bar(color="#294b53").encode(x=alt.X(custom_x, bin=True, title=custom_x.replace("_", " ").title()), y="count()")
+                elif custom_kind == "Scatter" and custom_y:
+                    custom_chart = alt.Chart(chart_df).mark_circle(color="#d86d42").encode(x=alt.X(custom_x, title=custom_x.replace("_", " ").title()), y=alt.Y(custom_y, title=custom_y.replace("_", " ").title()))
+                elif custom_kind == "Box plot" and custom_y:
+                    custom_chart = alt.Chart(chart_df).mark_boxplot().encode(x=alt.X(custom_x, title=custom_x.replace("_", " ").title()), y=alt.Y(custom_y, title=custom_y.replace("_", " ").title()))
+                elif custom_y:
+                    mark_methods = {"Bar": "mark_bar", "Line": "mark_line", "Area": "mark_area"}
+                    custom_chart = getattr(alt.Chart(chart_df), mark_methods[custom_kind])().encode(
+                        x=alt.X(custom_x, title=custom_x.replace("_", " ").title()),
+                        y=alt.Y(custom_y, aggregate="sum", title=custom_y.replace("_", " ").title()),
+                    )
+                else:
+                    st.info("Choose a numeric measure for this view.")
+                    custom_chart = None
+                if custom_chart is not None:
+                    st.altair_chart(custom_chart.properties(height=320).configure(**chart_config), width="stretch")
+
+            if numeric:
+                st.markdown("**Create a KPI for your view**")
+                kpi_metric = st.selectbox("Measure", numeric, key=f"custom_kpi_metric_{selected}")
+                kpi_operation = st.selectbox("Calculate", ["Total", "Average", "Highest", "Lowest"], key=f"custom_kpi_operation_{selected}")
+                if st.button("Calculate", key=f"custom_kpi_{selected}"):
+                    series = filtered_df[kpi_metric].dropna()
+                    operation = {"Total": "sum", "Average": "mean", "Highest": "max", "Lowest": "min"}[kpi_operation]
+                    st.metric(f"{kpi_operation} {kpi_metric.replace('_', ' ').title()}", f"{getattr(series, operation)():,.2f}", border=True)
 
 with dictionary:
     st.subheader("Every field has a meaning.")
@@ -314,15 +498,24 @@ with reports:
     st.download_button("Export conversation", json.dumps(chat["messages"], indent=2), "conversation.json")
 
 with conversation:
-    st.subheader("What are you curious about?")
-    st.caption("Ask a question, follow a thought, or dig a little deeper.")
+    st.subheader("Ask a business question")
+    st.caption("Use everyday language. You do not need to know formulas, charts, or code.")
+    suggested_questions = generate_question_starters(df)
+    question = None
+    if not chat["messages"]:
+        selected_question = st.pills("Questions based on this data", suggested_questions, label_visibility="visible")
+        if selected_question:
+            question = selected_question
     for message in chat["messages"]:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             for chart in message.get("charts", []):
                 if Path(chart["path"]).is_file():
                     st.image(chart["path"], caption=chart.get("title"))
-    if question := st.chat_input("Ask about your data"):
+    typed_question = st.chat_input("Ask anything about your data")
+    if typed_question:
+        question = typed_question
+    if question:
         history = [{"role": m["role"], "content": f"[Dataset: {m.get('dataset', 'previous')}] {m['content']}"} for m in chat["messages"]]
         with st.spinner("Analyzing…"):
             response = run_agent(question, dataset["path"], history=history, metadata=chat["metadata"], provider=provider, model=model)

@@ -1,6 +1,9 @@
 """Visual identity and presentation components for the data studio."""
 from html import escape
+from pathlib import Path
 import streamlit as st
+
+ASSET_DIRECTORY = Path(__file__).parent / "assets"
 
 
 def inject_styles():
@@ -24,17 +27,24 @@ h1,h2,h3,p,label { color:var(--ink); }
 [data-testid="stSidebar"] [data-baseweb="input"] { background:#253b4b; border-color:#3c505e; color:#f1f3f4; }
 [data-testid="stSidebar"] input { color:#f1f3f4; }
 [data-testid="stSidebar"] [data-testid="stExpander"] { border-color:#3c505e; }
+[data-testid="stSidebar"] [data-testid="stExpander"] summary { padding:12px 10px; }
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] summary { color:#f1c2a5; }
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stCaptionContainer"] p { line-height:1.55; }
+.account-panel { margin:0 0 18px; padding:13px 14px; background:#213949; border:1px solid #3e5663; border-radius:7px; }
+.account-panel strong { display:block; color:#f0b083; font-size:12px; margin-bottom:5px; }
+.account-panel span { display:block; color:#c1ced2; font-size:11px; line-height:1.5; }
+.account-panel.signed-in { border-left:3px solid #d86d42; }
+.sidebar-spacer { min-height:28px; }
 [data-testid="stSidebar"] button[kind="secondary"] { background:transparent; border-color:#50616d; color:#edf1f3; }
 [data-testid="stSidebar"] button[kind="secondary"]:hover { background:#2b4354; border-color:#c0c9ce; }
+[data-testid="stSidebar"] .stButton { margin-bottom:5px; }
+[data-testid="stSidebar"] .stButton button { min-height:38px; text-align:left; padding-left:13px; }
+[data-testid="stSidebar"] .stButton button p { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] { background:#253b4b; }
 [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] small { color:#bcc6cb; }
 [data-testid="stSidebar"] svg { color:#bac6ce; }
-.brand { display:flex; align-items:center; gap:12px; padding:8px 0 32px; }
-.brand-symbol { display:flex; align-items:flex-end; gap:3px; width:31px; height:31px; }
-.brand-symbol i { display:block; width:7px; background:#f18d5d; border-radius:2px; transform:skewY(-12deg); }
-.brand-symbol i:nth-child(1) { height:14px; }.brand-symbol i:nth-child(2) { height:23px; }.brand-symbol i:nth-child(3) { height:31px; }
-.brand-name { color:#f7f7f2; font-size:24px; font-weight:600; letter-spacing:-1px; }
-.brand-name small { color:#ed936b; font-size:11px; vertical-align:top; letter-spacing:0; margin-left:3px; }
+.brand { padding:8px 0 28px; }
+.brand img { display:block; width:100%; max-width:205px; height:auto; }
 .side-label { color:#99adb9; font-size:10px; letter-spacing:1.7px; font-weight:600; margin:25px 0 12px; }
 .side-note { border-top:1px solid #3a4d5b; margin-top:36px; padding-top:20px; font-size:12px; color:#a9bac5; line-height:1.7; }
 .side-note strong { color:#e3e9ec; font-weight:500; }
@@ -85,10 +95,30 @@ button[data-baseweb="tab"][aria-selected="true"] p { color:#b35430; font-weight:
 .insight-banner .eyebrow { color:#e3ab7b; margin-bottom:9px; }
 .quality-ring { display:flex; align-items:center; gap:15px; flex-shrink:0; }.quality-ring svg { width:74px; height:74px; }.quality-ring b { font-size:21px; color:#f3f5ee; font-weight:500; }.quality-ring small { display:block; color:#aabfc8; font-size:10px; letter-spacing:.5px; margin-top:3px; }
 [data-testid="stChatMessage"] { background:#fff; border:1px solid #e0e3da; border-radius:10px; }
+[data-testid="stPills"] label, [data-testid="stPills"] p { color:var(--ink) !important; }
+[data-testid="stPills"] button, [data-testid="stPills"] [role="option"] { background:#fff !important; color:#203746 !important; border:1px solid #cfd8cf !important; }
+[data-testid="stPills"] button:hover, [data-testid="stPills"] [role="option"]:hover { background:#eef2e9 !important; border-color:#b46543 !important; }
+[data-testid="stPills"] button[aria-checked="true"], [data-testid="stPills"] [role="option"][aria-selected="true"] { background:#294b53 !important; color:#fff !important; border-color:#294b53 !important; }
+[role="radiogroup"][aria-label="Questions based on this data"] button[data-variant="pills"] { background:#fff !important; color:#203746 !important; border:1px solid #cfd8cf !important; }
+[role="radiogroup"][aria-label="Questions based on this data"] button[data-variant="pills"] p { color:#203746 !important; }
+[role="radiogroup"][aria-label="Questions based on this data"] button[data-variant="pills"]:hover { background:#eef2e9 !important; border-color:#b46543 !important; }
+[role="radiogroup"][aria-label="Questions based on this data"] button[data-variant="pills"][aria-checked="true"] { background:#294b53 !important; color:#fff !important; border-color:#294b53 !important; }
+[role="radiogroup"][aria-label="Questions based on this data"] button[data-variant="pills"][aria-checked="true"] p { color:#fff !important; }
 [data-testid="stChatInput"] { background:#253b4b; border:1px solid #50616d; border-radius:8px; }
 [data-testid="stChatInput"] textarea { color:#f1f3f4 !important; caret-color:#f1f3f4; }
 [data-testid="stChatInput"] textarea::placeholder { color:#b9c5ca !important; opacity:1; }
 [data-testid="stChatInput"] button { color:#f1f3f4; }
+.model-map { display:flex; flex-direction:column; gap:16px; padding:20px; background:#eef2e9; border:1px solid #dce1d8; border-radius:8px; }
+.model-link { display:flex; align-items:center; gap:10px; width:100%; overflow:auto; }
+.model-node { min-width:210px; max-width:280px; padding:12px 15px 10px; background:#fff; border:1px solid #b9c9bd; border-top:4px solid #294b53; border-radius:6px; box-shadow:0 2px 6px rgba(24,41,56,.06); }
+.model-node strong { display:block; color:#203746; font-size:13px; margin-bottom:8px; overflow-wrap:anywhere; }
+.model-node small { display:block; color:#697681; line-height:1.5; overflow-wrap:anywhere; }
+.model-node .model-key { color:#b35430; font-weight:600; }
+.model-unlinked { border-top-color:#aab8ad; }
+.model-field { border-top:1px solid #edf0ea; padding-top:3px; margin-top:3px; }
+.model-arrow { min-width:180px; text-align:center; color:#b35430; }
+.model-arrow b { display:block; font-size:24px; line-height:1; }
+.model-arrow small { color:#697681; font-size:10px; line-height:1.4; }
 [data-testid="stSidebar"] .stButton button[kind="secondary"] { background:#253b4b; border-color:#4a606f; }
 [data-testid="stSidebar"] .stButton button[kind="secondary"] p { color:#e6edef; }
 [data-testid="stSidebar"] [data-testid="stSelectbox"] [role="group"] { background:#253b4b; border:1px solid #4a606f; }
@@ -100,11 +130,13 @@ button[data-baseweb="tab"][aria-selected="true"] p { color:#b35430; font-weight:
 
 
 def brand():
-    st.markdown('<div class="brand"><div class="brand-symbol"><i></i><i></i><i></i></div><div class="brand-name">analytoka<small>AI</small></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brand">', unsafe_allow_html=True)
+    st.image(str(ASSET_DIRECTORY / "analytoka-logo.svg"), width=205)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def topline(loaded):
-    st.markdown(f'<div class="topline"><div class="breadcrumb">Workspace<span>/</span><b>{"Data studio" if loaded else "Overview"}</b></div><div class="status"><i></i>Your work is saved locally</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="topline"><div class="breadcrumb">Workspace<span>/</span><b>{"Your data" if loaded else "Overview"}</b></div><div class="status"><i></i>Your work is saved locally</div></div>', unsafe_allow_html=True)
 
 
 def welcome():
@@ -117,7 +149,7 @@ def workflow():
 
 def dataset_heading(name, count):
     label = name.rsplit(' [', 1)[0]
-    st.markdown(f'<div class="dataset-heading"><div><div class="eyebrow">Your analysis workspace</div><h1>{escape(label)}</h1><p>A closer look at the numbers behind your next decision.</p></div><div class="dataset-badge">{count} {"dataset" if count == 1 else "datasets"} in workspace</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="dataset-heading"><div><div class="eyebrow">Your workspace</div><h1>{escape(label)}</h1><p>A closer look at the data behind your next decision.</p></div><div class="dataset-badge">{count} {"source" if count == 1 else "sources"} available</div></div>', unsafe_allow_html=True)
 
 
 def overview_banner(df):

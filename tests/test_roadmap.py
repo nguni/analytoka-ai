@@ -49,6 +49,16 @@ def test_storage_round_trip(root):
     workspace.save_chat(chat)
     assert workspace.list_chats() == [chat]
 
+def test_saved_chats_are_scoped_to_owner(root):
+    first = workspace.new_chat()
+    first["owner"] = "first@example.com"
+    workspace.save_chat(first)
+    second = workspace.new_chat()
+    second["owner"] = "second@example.com"
+    workspace.save_chat(second)
+    assert workspace.list_chats(owner="first@example.com") == [first]
+    assert workspace.list_chats(owner="second@example.com") == [second]
+
 def test_import_all_sheets_and_same_name_changes(root):
     output = io.BytesIO()
     with pd.ExcelWriter(output) as writer:
@@ -61,6 +71,24 @@ def test_import_all_sheets_and_same_name_changes(root):
     workspace.import_upload(chat, "file.csv", b"x\n1\n")
     workspace.import_upload(chat, "file.csv", b"x\n2\n")
     assert len(chat["datasets"]) == 4
+
+def test_relationships_are_suggested_and_can_be_added(root):
+    chat = workspace.new_chat()
+    workspace.import_upload(chat, "customers.csv", b"customer_id,name\n1,Ada\n2,Lin\n")
+    workspace.import_upload(chat, "orders.csv", b"order_id,customer_id,total\n10,1,25\n11,1,30\n12,2,15\n")
+    suggested = chat["relationships"]
+    assert any(item["one_column"] == "customer_id" and item["many_column"] == "customer_id" for item in suggested)
+    workspace.add_relationship(chat, "customers.csv [", "customer_id", "orders.csv [", "customer_id")
+    assert chat["relationships"][-1]["source"] == "manual"
+
+def test_question_starters_use_uploaded_fields():
+    starters = workspace.generate_question_starters(pd.DataFrame({
+        "region": ["East", "West"],
+        "sales": [10, 20],
+        "date": ["2024-01-01", "2024-02-01"],
+    }))
+    assert any("region" in question and "sales" in question for question in starters)
+    assert any("changed over date" in question for question in starters)
 
 def test_join_cardinality_and_null_guard():
     with pytest.raises(pd.errors.MergeError):
@@ -102,10 +130,9 @@ def test_app_startup_without_key(root):
 
 def test_app_loaded_workspace(root):
     from streamlit.testing.v1 import AppTest
-    chat = workspace.new_chat()
-    workspace.import_upload(chat, "sample.csv", b"region,sales,target,date\nEast,10,12,2024-01-01\nWest,20,15,2024-02-01\n")
-    workspace.save_chat(chat)
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "projects/ai_data_analyst/app.py")).run(timeout=30)
+    assert not app.exception
+    app = next(b for b in app.button if b.label == "Try sample data").click().run(timeout=30)
     assert not app.exception
     next(b for b in app.button if b.label == "Calculate").click().run(timeout=30)
     assert not app.exception
@@ -152,17 +179,9 @@ def test_outliers_and_conversion_failure():
 
 def test_app_dataset_switch_and_new_chat(root):
     from streamlit.testing.v1 import AppTest
-    chat = workspace.new_chat()
-    workspace.import_upload(chat, "one.csv", b"x,value\na,1\n")
-    workspace.import_upload(chat, "two.csv", b"x,value\nb,2\n")
-    chat["summary"] = "stale summary"
-    workspace.save_chat(chat)
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "projects/ai_data_analyst/app.py")).run(timeout=60)
     assert not app.exception
-    box = next(s for s in app.selectbox if s.label == "Active dataset / worksheet")
-    box.select(list(chat["datasets"])[0]).run(timeout=60)
-    assert not app.exception
-    assert "summary" not in app.session_state.chats[chat["id"]]
+    assert not any(button.label == "Data to discuss" for button in app.button)
     next(b for b in app.button if b.label == "New chat").click().run(timeout=60)
     assert not app.exception
-    assert app.session_state.active_chat != chat["id"]
+    assert not app.session_state.chats[app.session_state.active_chat]["messages"]
